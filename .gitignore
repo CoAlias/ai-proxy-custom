@@ -129,3 +129,4 @@ dist
 # custom
 .DS_Store
 .wrangler/
+*.sqlite
