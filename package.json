@@ -1,0 +1,16 @@
+{
+  "name": "ai-proxy-bubble",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "start": "wrangler dev"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  },
+  "dependencies": {
+    "@tsndr/cloudflare-worker-jwt": "^2.2.1",
+    "itty-router": "^4.0.14"
+  }
+}

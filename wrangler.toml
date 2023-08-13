@@ -1,0 +1,8 @@
+name = "ai-proxy-custom"
+main = "src/worker.js"
+compatibility_date = "2023-08-07"
+compatibility_flags = [ "nodejs_compat" ]
+
+[vars]
+CLIENT_ID = ""
+CLIENT_SECRET = ""
