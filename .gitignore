@@ -130,3 +130,4 @@ dist
 .DS_Store
 .wrangler/
 *.sqlite
+.DS_Store
