@@ -9,49 +9,57 @@ const router = Router();
 router
   .all("*", preflight)
   .options("*", corsify)
-  .all("*", async (request, env, ctx) => {
-    if (!env.CLIENT_ID) return json({ error: "Internal Server Error: No Client ID specified" });
-    if (!env.CLIENT_SECRET) return json({ error: "Internal Server Error: No Client SECRET specified" });
-
-    console.log('Check Client ID');
-
-    var client_id = request.query.client_id;
-
-    if (!client_id) return json({ error: "Unauthorized: No Client ID" });
-
-    if (client_id != env.CLIENT_ID) return json({ error: "Unauthorized: Invalid Client ID" });
-
-    console.log("Access granted for " + client_id);
+  .all("/ai/ping", (request, env, ctx) => {
+    return json({
+      message: "AI Service is running!"
+    });
   })
 
-  .all("/openai/*", async (request, env, ctx) => {
-    console.log("OpenAI request received!");
+  .all("/ai/*", async (request, env, ctx) => {
+    console.log('Check Client ID');
+    
+    if(env.CUSTOM_SERVER_NAME) {
+      if (!env.CLIENT_ID) return json({ error: "Internal Server Error: No Client ID specified" });
+      if (!env.CLIENT_SECRET) return json({ error: "Internal Server Error: No Client SECRET specified" });
+
+      if(request.query.client_id != env.CLIENT_ID) return json({ error: "Unauthorized: Invalid Client ID" });
+
+      request.secret = env.CLIENT_SECRET
+    } else {
+      var client_id = request.query.client_id;
+
+      if (!client_id) return json({ error: "Unauthorized: No Client ID" });
+
+      var access = await env.CLIENT_KEYS.get(client_id);
+
+      if (!access) return json({ error: "Unauthorized: Invalid Client ID" });
+
+      var access_object = JSON.parse(access);
+
+      request.secret = access_object.secret;
+
+      console.log("Access granted for " + client_id);
+    }
 
     const webtoken = (await request.text()) || request.query.token;
 
     if (!webtoken) return json({ error: "Request is empty" });
 
-    if (!(await jwt.verify(webtoken, env.CLIENT_SECRET))) return json({ error: "Unauthorized: Request expired or invalid" });
+    if (!(await jwt.verify(webtoken, request.secret))) return json({ error: "Unauthorized: Request expired or invalid" });
 
     if (await isTokenProcessed(webtoken)) return json({ error: "Unauthorized: Request already processed" });
 
-    try {
-      // Decoding token
-      var payload;
+    // Decoding token
+    var payload;
       
-      try {
-        payload = jwt.decode(webtoken).payload;
-      } catch(error) {
-        return json({ error: "JSON parsing error: " + error.message });
-      }
+    try {
+      payload = jwt.decode(webtoken).payload;
+    } catch(error) {
+      return json({ error: "JSON parsing error: " + error.message });
+    }
 
-      var params = atob(payload.params);
-
-      console.log(payload.api_key)
-
-      var api_key = await decrypt(payload.api_key, env.CLIENT_SECRET);
-
-      if(!api_key) return json({ error: "API MISSING"});
+    try {
+      var params = (payload.encrypt ? await decrypt(payload.params, request.secret) : atob(payload.params))
 
       try {
         if (typeof params == "string") params.replace('"', "");
@@ -63,13 +71,34 @@ router
         return json({ error: "JSON parsing error: " + error.message });
       }
 
-      params.stream = true;
+      request.ai_params = params
+
+      var api_key = await decrypt(payload.api_key, request.secret);
+
+      if(!api_key) return json({ error: "API MISSING"});
+
+      request.ai_api_key = api_key
+
+      if(payload.custom_ai_url) request.ai_url = (payload.encrypt ? await decrypt(payload.custom_ai_url, request.secret) : payload.custom_ai_url)
+    } catch(e) {
+      return json({ error: "Decryption error: " + e.message });
+    }
+  })
+
+  .all("/ai/openai/*", async (request) => {
+    console.log("OpenAI request received!");
+
+    try {
+      
+      var api_key = request.ai_api_key;
+
+      request.ai_params.stream = true;
 
       var url = new URL(request.url);
 
-      var endpoint = url.pathname.replace("/openai", "");
+      var endpoint = url.pathname.replace("/ai/openai", "");
 
-      var ai_url = payload.custom_ai_url || ("https://api.openai.com" + endpoint)
+      var ai_url = request.ai_url || ("https://api.openai.com" + endpoint)
 
       console.log(`OpenAI endpoint: ${ai_url}`)
 
@@ -79,21 +108,128 @@ router
           "Content-Type": "application/json",
           Authorization: `Bearer ${api_key}`,
         },
-        body: JSON.stringify(params),
+        body: JSON.stringify(request.ai_params),
       }).catch(function(error){
         return json({ error: "Fetch Error: " + error.message });
       });
 
+      // todo non streaming responses
       if (response.ok) return response;
-      else return json({ error: "OpenAI Error: " + (await response.json())?.error?.message });
+      else {
+        var json_error = await response.json()
+        return json({ error: "OpenAI Error: " + json_error?.error?.message, error_object: json_error, error_status_code: response.status, error_type: json_error?.error?.type, error_code: json_error?.error?.code, error_status_text: response.statusText});
+      }
     } catch (error) {
       return json({ error: "Invalid Request: " + error.message });
     }
   })
 
-  .all("*", () => {
-    return json({ error: "no endpoint found" });
-  });
+  .all("/ai/openrouter/*", async (request) => {
+    console.log("OpenRouter request received!");
+
+    if(!request.query.referer) return json({ error: "No referer passed" });
+    if(!request.query.title) return json({ error: "No title passed" });
+
+    try {
+      
+      var api_key = request.ai_api_key;
+
+      request.ai_params.stream = true;
+
+      var url = new URL(request.url);
+
+      var endpoint = url.pathname.replace("/ai/openrouter", "");
+
+      var ai_url = request.ai_url || ("https://openrouter.ai" + endpoint)
+
+      console.log(`OpenRouter endpoint: ${ai_url}`)
+
+      var response = await fetch(ai_url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "HTTP-Referer": decodeURIComponent(request.query.referer),
+          "x-title": request.query.title,
+          Authorization: `Bearer ${api_key}`,
+        },
+        body: JSON.stringify(request.ai_params),
+      }).catch(function(error){
+        return json({ error: "Fetch Error: " + error.message });
+      });
+
+      if (response.ok) return response;
+      else {
+        var json_text = await response.text();
+        console.log(json_text)
+        try {
+          var json_error = JSON.parse(json_text);
+          return json({ error: "OpenRouter Error: " + json_error?.error?.message, error_status_code: response.status, error_status_text: response.statusText});
+        } catch(e) {
+          return json({ error: "OpenRouter Error: " + json_text, error_status_code: response.status, error_status_text: response.statusText});
+        }
+      }
+    } catch (error) {
+      return json({ error: "Invalid Request: " + error.message + error.stack });
+    }
+  })
+
+  .all("/ai/anthropic/*", async (request) => {
+    console.log("Anthropic request received!");
+
+    try {
+      
+      var api_key = request.ai_api_key;
+
+      request.ai_params.stream = true;
+
+      var url = new URL(request.url);
+
+      var endpoint = url.pathname.replace("/ai/anthropic", "");
+
+      var ai_url = request.ai_url || ("https://api.anthropic.com" + endpoint)
+
+      console.log(`Anthropic endpoint: ${ai_url}`)
+
+      var response = await fetch(ai_url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": api_key,
+        },
+        body: JSON.stringify(request.ai_params),
+      }).catch(function(error){
+        return json({ error: "Fetch Error: " + error.message });
+      });
+
+      // todo non streaming responses
+      if (response.ok) return response;
+      else {
+        var json_error = await response.json()
+        return json({  error: "Anthropic Error: " + json_error?.error?.message, error_type: json_error?.error?.type, error_status_code: response.status, error_status_text: response.statusText});
+      }
+    } catch (error) {
+      return json({ error: "Invalid Request: " + error.message });
+    }
+  })
+  
+  .all('*', async (request, env, ctx) => {
+    try {
+      // Add logic to decide whether to serve an asset or run your original Worker code
+      return await getAssetFromKV(
+        {
+          request,
+          waitUntil: ctx.waitUntil.bind(ctx),
+        },
+        {
+          ASSET_NAMESPACE: env.__STATIC_CONTENT,
+          ASSET_MANIFEST: assetManifest,
+        }
+      );
+    } catch (e) {
+      let pathname = new URL(request.url).pathname;
+      return json({ error: "no endpoint found: " + pathname });
+    }
+  })
 
 // Example: Cloudflare Worker module syntax
 export default {
@@ -116,7 +252,7 @@ async function isTokenProcessed(webtoken) {
   }
 
   var token_hash = await computeHash(webtoken);
-  var aiproxytoken_cache_key = new Request("https://nocodesaastoolbox.com//" + token_hash);
+  var aiproxytoken_cache_key = new Request("https://ai.proxy.com/" + token_hash);
 
   if (await aiproxytoken_cache.match(aiproxytoken_cache_key)) return true;
   else {
