@@ -9,6 +9,7 @@ const router = Router();
 router
   .all("*", preflight)
   .options("*", corsify)
+  
   .all("/ai/ping", (request, env, ctx) => {
     return json({
       message: "AI Service is running!"
@@ -59,7 +60,13 @@ router
     }
 
     try {
-      var params = (payload.encrypt ? await decrypt(payload.params, request.secret) : atob(payload.params))
+
+      function b64_to_utf8(str) {
+        return decodeURIComponent(atob(str).split('').map(function(c) {
+            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+        }).join(''));
+      }
+      var params = (payload.encrypt ? await decrypt(payload.params, request.secret) : b64_to_utf8(payload.params))
 
       try {
         if (typeof params == "string") params.replace('"', "");
