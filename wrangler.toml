@@ -6,3 +6,4 @@ compatibility_flags = [ "nodejs_compat" ]
 [vars]
 CLIENT_ID = ""
 CLIENT_SECRET = ""
+CUSTOM_SERVER_NAME = "My Custom Server"
